@@ -1,9 +1,9 @@
-''' train and validate model '''
+''' main module '''
 import torch
 import torchvision.datasets
 import VGG
 import trainVGG
-
+import graphics
 
 CIFAR_train = torchvision.datasets.CIFAR10('./', download=True, train=True)
 CIFAR_test = torchvision.datasets.CIFAR10('./', download=True, train=False)
@@ -25,8 +25,10 @@ print(f'X_train shape: {X_train.shape}',
 )
 
 def main():
+    net_list = []
     accuracies = {}
     losses = {}
-    accuracies['VGG'], losses['VGG'] = trainVGG.train2(VGG.VGG(), X_train, y_train, X_test, y_test)
-
+    accuracies['VGG11'], losses['VGG11'] = trainVGG.train2(VGG.VGG(), X_train, y_train, X_test, y_test)
+    net_list.append(VGG.VGG())
+    graphics.acc_loss_graph(accuracies, losses, net_list)
 main()
