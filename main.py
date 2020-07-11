@@ -24,11 +24,17 @@ print(f'X_train shape: {X_train.shape}',
     f'y_test shape: {y_test.shape}'
 )
 
+LOSS = torch.nn.CrossEntropyLoss()
+NET = VGG.VGG('E')
+OPTIMIZER = torch.optim.SGD(NET.parameters(), momentum=0.9, lr=0.01, weight_decay=0.001)
+
 def main():
     net_list = []
     accuracies = {}
     losses = {}
-    accuracies['VGG11'], losses['VGG11'] = trainVGG.train2(VGG.VGG(), X_train, y_train, X_test, y_test)
-    net_list.append(VGG.VGG())
-    graphics.acc_loss_graph(accuracies, losses, net_list)
+    accuracies[NET], losses[NET] = trainVGG.train(NET, X_train, y_train, X_test, y_test, OPTIMIZER, LOSS, save_net_state=True, 
+                                                            load_model=False)
+    net_list.append(NET)
+    graphics.acc_loss_graph(accuracies, losses, net_list, download=True)
 main()
+    
