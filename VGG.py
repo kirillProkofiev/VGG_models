@@ -9,7 +9,7 @@ VGG_types = {
     'B': [64, 64, 'M', 128, 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
     'D': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M'],
     'E': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 
-          512, 512, 512, 512, 'M'],
+          512, 512, 512, 512],
 }
 
 
@@ -17,12 +17,10 @@ class VGG(torch.nn.Module):
     def __init__(self, VGG_type='A', in_channels=3, num_classes=10):
         super().__init__()
         self.in_channels = in_channels
+        self.average_pool = nn.AvgPool2d(kernel_size=2)
         self.conv_layers = self.create_conv_layers(VGG_types[VGG_type])
         # FC layers
         self.fcs = nn.Sequential(
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Dropout(p=0.5),
             nn.Linear(512, 512),
             nn.ReLU(),
             nn.Dropout(p=0.5),
@@ -31,7 +29,7 @@ class VGG(torch.nn.Module):
 
     def forward(self, x):
         x = self.conv_layers(x)
-
+        x = self.average_pool(x)
         x = x.view(x.size(0), -1)
         x = self.fcs(x)
 
