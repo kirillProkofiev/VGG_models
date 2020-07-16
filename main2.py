@@ -8,7 +8,9 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torch.utils.tensorboard import SummaryWriter
 import time
+import torch.nn.functional as F
 import VGG
+from label_smoothing import LabelSmoothingLoss, CrossEntropyReduction
 # from ptflops import get_model_complexity_info
 
 parser = argparse.ArgumentParser(description='Cifar training')
@@ -28,12 +30,14 @@ parser.add_argument('-j', '--workers', default=4, type=int,
 parser.add_argument('--cuda', type=bool, default=True, help='use cpu')
 parser.add_argument('--print-freq', '-p', default=20, type=int, help='print frequency (default: 20)')
 parser.add_argument('--adjust_lr', type=bool, default=True, help='use adjusted lr or not')
+parser.add_argument('--save_checkpoint', type=bool, default=False, help='whether or not to save your model')
 
-best_prec1 = 0
-writer = SummaryWriter(f'/home/prokofiev/pytorch/VGG_proj/runing') # specify directory which tensorboard can read
+BEST_ACCURACY = 0
+WRITER = SummaryWriter(f'/home/prokofiev/pytorch/VGG_proj/runing') # specify directory which tensorboard can read
+STEP = 0
 
 def main():
-    global args, best_prec1
+    global args, BEST_ACCURACY
     args = parser.parse_args()
     model = VGG.VGG(VGG_type=args.arch)
     # with torch.cuda.device(0):
@@ -64,13 +68,13 @@ def main():
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = LabelSmoothingLoss(10)
     
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.adjust_lr:
@@ -82,8 +86,11 @@ def main():
         prec1 = validate(val_loader, model, criterion)
 
         # remember best prec1 and save checkpoint
-        best_prec1 = max(prec1, best_prec1)
-        print(f'best_prec1:  {best_prec1}')
+        best_prec1 = max(prec1, BEST_ACCURACY)
+        print(f'best_prec1:  {BEST_ACCURACY}')
+        if prec1 > BEST_ACCURACY and args.save_checkpoint:
+            checkpoint = {'state_dict': net.state_dict(), 'optimizer': optimizer.state_dict()}
+            save_checkpoint(checkpoint, 'my_modelVGG16.pth.tar')
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -100,10 +107,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    step = 0
     for i, (input, target) in enumerate(train_loader):
-        # target = label_smoothing(target)
-        # print(target)
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -128,19 +132,20 @@ def train(train_loader, model, criterion, optimizer, epoch):
         losses.update(loss.item(), input.size(0))
         top1.update(prec1, input.size(0))
         # write to writer for tensorboard
-        writer.add_scalar('Training loss VGG16', loss, global_step=step )
-        writer.add_scalar('Training accuracy VGG16',  prec1, global_step=step)
+        writer.add_scalar('Training loss VGG16', loss, global_step=STEP )
+        writer.add_scalar('Training accuracy VGG16',  prec1, global_step=STEP)
+        STEP += 1
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
         if i % args.print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
+                  'lr {lr}\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Prec1 {top1.val:.3f} ({top1.avg:.3f})'.format(
-                      epoch, i, len(train_loader), batch_time=batch_time,
-                      data_time=data_time, loss=losses, top1=top1))
+                    epoch, i, len(train_loader), lr=optimizer.param_groups[0]['lr'], batch_time=batch_time, loss=losses, top1=top1))
 
 
 def validate(val_loader, model, criterion):
@@ -207,25 +212,20 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-def label_smoothing(true_labels, classes=10, smoothing=0.1):
-    """
-    if smoothing == 0, it's one-hot method
-    if 0 < smoothing < 1, it's smooth method
-
-    """
-    assert 0 <= smoothing < 1
-    confidence = 1.0 - smoothing
-    label_shape = torch.Size((true_labels.size(0), classes))
-    with torch.no_grad():
-        true_dist = torch.empty(size=label_shape, device=true_labels.device)
-        true_dist.fill_(smoothing / (classes - 1))
-        true_dist.scatter_(1, true_labels.data.unsqueeze(1), confidence)
-    return true_dist
-
 def accuracy(output, target, topk=(1,)):
     """Computes the precision k for the specified values of k"""
     accuracy = (output.argmax(dim=1) == target).float().mean().item()
     return accuracy
+
+def save_checkpoint(state, filename="my_model.pth.tar"):
+    print('==> saving checkpoint')
+    torch.save(state, filename)
+
+def load_checkpoint(checkpoint, net, optimizer, load_optimizer=False):
+    print("==> Loading checkpoint")
+    net.load_state_dict(checkpoint['state_dict'])
+    if load_optimizer:
+        optimizer.load_state_dict(checkpoint['optimizer'])
 
 if __name__ == '__main__':
     main()
