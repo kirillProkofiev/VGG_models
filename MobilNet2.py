@@ -63,7 +63,7 @@ class MobileNetV2(nn.Module):
             for stride in strides:
                 layers.append(InvertedResidual(in_channels, out_channels, expansion, stride))
                 in_channels = out_channels
-        return nn.Sequential(*layers)s
+        return nn.Sequential(*layers)
 
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))

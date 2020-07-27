@@ -10,9 +10,9 @@ from torch.utils.tensorboard import SummaryWriter
 import time
 import torch.nn.functional as F
 import VGG
-from label_smoothing import LabelSmoothingLoss, CrossEntropyReduction
 import MobilNet2
 import numpy as np
+from label_smoothing import LabelSmoothingLoss, CrossEntropyReduction
 
 parser = argparse.ArgumentParser(description='Cifar training')
 parser.add_argument('--arch', type=str, default='D', help='model architecture')
@@ -28,6 +28,7 @@ parser.add_argument('--momentum', default=0.9, type=float,
 parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float, help='weight decay (default: 5e-4)')
 parser.add_argument('-j', '--workers', default=4, type=int,
                     help='number of data loading workers (default: 4)')
+parser.add_argument('--model', default='MobileNet2', type=str, help='model to use')
 parser.add_argument('--cuda', type=bool, default=True, help='use cpu')
 parser.add_argument('--print-freq', '-p', default=20, type=int, help='print frequency (default: 20)')
 parser.add_argument('--adjust_lr', type=bool, default=True, help='use adjusted lr or not')
@@ -36,7 +37,7 @@ parser.add_argument('--beta', default=0, type=float, help='hyperparameter beta')
 parser.add_argument('--cutmix_prob', default=0, type=float, help='cutmix probability')
 
 BEST_ACCURACY = 0
-WRITER = SummaryWriter(f'/home/prokofiev/pytorch/VGG_proj/runing') # specify directory which tensorboard can read
+WRITER = SummaryWriter(f'/home/prokofiev/pytorch/VGG_proj/runing/mobilnet2_44') # specify directory which tensorboard can read
 STEP = 0
 
 def main():
@@ -88,7 +89,7 @@ def main():
         prec1 = validate(val_loader, model, criterion)
 
         # remember best prec1 and save checkpoint
-        best_prec1 = max(prec1, BEST_ACCURACY)
+        BEST_ACCURACY = max(prec1, BEST_ACCURACY)
         print(f'best_prec1:  {BEST_ACCURACY}')
         if prec1 > BEST_ACCURACY and args.save_checkpoint:
             checkpoint = {'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict()}
@@ -96,6 +97,7 @@ def main():
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
+    global STEP, args
     """
         Run one train epoch
     """
@@ -116,7 +118,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if args.cuda:
             input = input.cuda()
             target = target.cuda()
-
+        r = np.random.rand(1)
         if args.beta > 0 and r < args.cutmix_prob:
             # generate mixed sample
             lam = np.random.beta(args.beta, args.beta)
