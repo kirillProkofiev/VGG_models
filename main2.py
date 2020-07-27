@@ -30,6 +30,7 @@ parser.add_argument('-j', '--workers', default=4, type=int,
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--model', default='MobileNet2', type=str, help='model to use')
 parser.add_argument('--cuda', type=bool, default=True, help='use cpu')
+parser.add_argument('--GPU', default=0, type=int, help='specify which gpu to use')
 parser.add_argument('--print-freq', '-p', default=20, type=int, help='print frequency (default: 20)')
 parser.add_argument('--adjust_lr', type=bool, default=True, help='use adjusted lr or not')
 parser.add_argument('--save_checkpoint', type=bool, default=False, help='whether or not to save your model')
@@ -77,7 +78,7 @@ def main():
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100,150], gamma=0.1)
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.adjust_lr:
@@ -105,8 +106,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-    model.cuda()
-    criterion.cuda()
+    model.cuda(device=args.GPU)
+    criterion.cuda(device=args.GPU)
     # switch to train mode
     model.train()
 
@@ -116,13 +117,13 @@ def train(train_loader, model, criterion, optimizer, epoch):
         data_time.update(time.time() - end)
 
         if args.cuda:
-            input = input.cuda()
-            target = target.cuda()
+            input = input.cuda(device=args.GPU)
+            target = target.cuda(device=args.GPU)
         r = np.random.rand(1)
         if args.beta > 0 and r < args.cutmix_prob:
             # generate mixed sample
             lam = np.random.beta(args.beta, args.beta)
-            rand_index = torch.randperm(input.size()[0]).cuda()
+            rand_index = torch.randperm(input.size()[0]).cuda(device=args.GPU)
             target_a = target
             target_b = target[rand_index]
             bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
@@ -180,8 +181,8 @@ def validate(val_loader, model, criterion):
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         if args.cuda:
-            input = input.cuda()
-            target = target.cuda()
+            input = input.cuda(device=args.GPU)
+            target = target.cuda(device=args.GPU)
 
         # compute output
         with torch.no_grad():
@@ -233,7 +234,7 @@ class AverageMeter(object):
 def accuracy(output, target, topk=(1,)):
     """Computes the precision k for the specified values of k"""
     accuracy = (output.argmax(dim=1) == target).float().mean().item()
-    return accuracy
+    return accuracy*100
 
 def save_checkpoint(state, filename="my_model.pth.tar"):
     print('==> saving checkpoint')
