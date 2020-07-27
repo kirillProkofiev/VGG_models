@@ -132,7 +132,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
             # compute output
             output = model(input)
-            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam) # почему не просто подставляем в критерий изменненый таргет
         else:
             # compute output
             output = model(input)
