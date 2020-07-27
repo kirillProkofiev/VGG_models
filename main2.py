@@ -11,16 +11,17 @@ import time
 import torch.nn.functional as F
 import VGG
 from label_smoothing import LabelSmoothingLoss, CrossEntropyReduction
-# from ptflops import get_model_complexity_info
+import MobilNet2
+import numpy as np
 
 parser = argparse.ArgumentParser(description='Cifar training')
 parser.add_argument('--arch', type=str, default='D', help='model architecture')
-parser.add_argument('--epochs', default=70, type=int,
+parser.add_argument('--epochs', default=200, type=int,
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int,
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('-b', '--batch-size', default=128, type=int, help='mini-batch size (default: 128)')
-parser.add_argument('--lr', '--learning-rate', default=0.01, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.05, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float,
                     help='momentum')
@@ -31,6 +32,8 @@ parser.add_argument('--cuda', type=bool, default=True, help='use cpu')
 parser.add_argument('--print-freq', '-p', default=20, type=int, help='print frequency (default: 20)')
 parser.add_argument('--adjust_lr', type=bool, default=True, help='use adjusted lr or not')
 parser.add_argument('--save_checkpoint', type=bool, default=False, help='whether or not to save your model')
+parser.add_argument('--beta', default=0, type=float, help='hyperparameter beta')
+parser.add_argument('--cutmix_prob', default=0, type=float, help='cutmix probability')
 
 BEST_ACCURACY = 0
 WRITER = SummaryWriter(f'/home/prokofiev/pytorch/VGG_proj/runing') # specify directory which tensorboard can read
@@ -39,15 +42,14 @@ STEP = 0
 def main():
     global args, BEST_ACCURACY
     args = parser.parse_args()
-    model = VGG.VGG(VGG_type=args.arch)
-    # with torch.cuda.device(0):
-    #     macs, params = get_model_complexity_info(model, (3, 224, 224), as_strings=True,
-    #                                        print_per_layer_stat=True, verbose=True)
-    #     print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
-    #     print('{:<30}  {:<8}'.format('Number of parameters: ', params))
 
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    if args.model == 'VGG':
+        model = VGG.VGG(VGG_type=args.arch)
+    elif args.model == 'MobileNet2':
+        model = MobilNet2.MobileNetV2()     
+
+    normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
+                                         std=[x / 255.0 for x in [63.0, 62.1, 66.7]])
 
     train_loader = torch.utils.data.DataLoader(
         datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
@@ -68,7 +70,7 @@ def main():
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
-    criterion = LabelSmoothingLoss(10)
+    criterion = nn.CrossEntropyLoss()
     
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
@@ -89,7 +91,7 @@ def main():
         best_prec1 = max(prec1, BEST_ACCURACY)
         print(f'best_prec1:  {BEST_ACCURACY}')
         if prec1 > BEST_ACCURACY and args.save_checkpoint:
-            checkpoint = {'state_dict': net.state_dict(), 'optimizer': optimizer.state_dict()}
+            checkpoint = {'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict()}
             save_checkpoint(checkpoint, 'my_modelVGG16.pth.tar')
 
 
@@ -115,9 +117,23 @@ def train(train_loader, model, criterion, optimizer, epoch):
             input = input.cuda()
             target = target.cuda()
 
-        # compute output
-        output = model(input)
-        loss = criterion(output, target)
+        if args.beta > 0 and r < args.cutmix_prob:
+            # generate mixed sample
+            lam = np.random.beta(args.beta, args.beta)
+            rand_index = torch.randperm(input.size()[0]).cuda()
+            target_a = target
+            target_b = target[rand_index]
+            bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+            input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+            # adjust lambda to exactly match pixel ratio
+            lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+            # compute output
+            output = model(input)
+            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+        else:
+            # compute output
+            output = model(input)
+            loss = criterion(output, target)
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -132,8 +148,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         losses.update(loss.item(), input.size(0))
         top1.update(prec1, input.size(0))
         # write to writer for tensorboard
-        writer.add_scalar('Training loss VGG16', loss, global_step=STEP )
-        writer.add_scalar('Training accuracy VGG16',  prec1, global_step=STEP)
+        WRITER.add_scalar('Training loss VGG16', loss, global_step=STEP )
+        WRITER.add_scalar('Training accuracy VGG16',  prec1, global_step=STEP)
         STEP += 1
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -226,6 +242,24 @@ def load_checkpoint(checkpoint, net, optimizer, load_optimizer=False):
     net.load_state_dict(checkpoint['state_dict'])
     if load_optimizer:
         optimizer.load_state_dict(checkpoint['optimizer'])
+
+def rand_bbox(size, lam):
+    W = size[2]
+    H = size[3]
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = np.int(W * cut_rat)
+    cut_h = np.int(H * cut_rat)
+
+    # uniform
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+
+    bbx1 = np.clip(cx - cut_w // 2, 0, W)
+    bby1 = np.clip(cy - cut_h // 2, 0, H)
+    bbx2 = np.clip(cx + cut_w // 2, 0, W)
+    bby2 = np.clip(cy + cut_h // 2, 0, H)
+
+    return bbx1, bby1, bbx2, bby2
 
 if __name__ == '__main__':
     main()
