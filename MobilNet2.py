@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from amsoftmax import AngleSimpleLinear
 
 
 class InvertedResidual(nn.Module):
