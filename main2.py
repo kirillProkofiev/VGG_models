@@ -13,6 +13,9 @@ import VGG
 import MobilNet2
 import numpy as np
 from label_smoothing import LabelSmoothingLoss, CrossEntropyReduction
+import torch.nn.functional as F
+import albumentations as A
+from amsoftmax import AMSoftmaxLoss
 
 parser = argparse.ArgumentParser(description='Cifar training')
 parser.add_argument('--arch', type=str, default='D', help='model architecture')
@@ -36,6 +39,7 @@ parser.add_argument('--adjust_lr', type=bool, default=True, help='use adjusted l
 parser.add_argument('--save_checkpoint', type=bool, default=False, help='whether or not to save your model')
 parser.add_argument('--beta', default=0, type=float, help='hyperparameter beta')
 parser.add_argument('--cutmix_prob', default=0, type=float, help='cutmix probability')
+parser.add_argument('--loss', type=str, default='cross_entropy', help='choose which loss to use')
 
 BEST_ACCURACY = 0
 WRITER = SummaryWriter(f'/home/prokofiev/pytorch/VGG_proj/runing/mobilnet2_44') # specify directory which tensorboard can read
@@ -60,7 +64,8 @@ def main():
             transforms.RandomCrop(32, 4),
             transforms.ToTensor(),
             normalize,
-        ]), download=True),
+        ]),
+        download=True),
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
@@ -72,8 +77,11 @@ def main():
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
-    criterion = nn.CrossEntropyLoss()
-    
+    if args.loss == 'cross_entropy':
+        criterion = nn.CrossEntropyLoss()
+    else:
+        criterion = AMSoftmaxLoss(margin_type='cos', s=5)
+        
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
@@ -115,10 +123,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
-
         if args.cuda:
             input = input.cuda(device=args.GPU)
             target = target.cuda(device=args.GPU)
+        # make onehot here
         r = np.random.rand(1)
         if args.beta > 0 and r < args.cutmix_prob:
             # generate mixed sample
@@ -132,11 +140,24 @@ def train(train_loader, model, criterion, optimizer, epoch):
             lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
             # compute output
             output = model(input)
-            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam) # почему не просто подставляем в критерий изменненый таргет
+
+            # trying to debug manually (like pseodocode)
+            # get one hot target vectors
+            target_a2 = F.one_hot(target) 
+            target_b2 = F.one_hot(target)[rand_index]
+            # computing log(p)
+            log_probabilities = F.log_softmax(output, dim=-1) 
+            # do merging classes (cutmix)
+            new_target = lam*target_a2 + (1.0 - lam)*target_b2
+            # compute two losses with help torch function and manually
+            loss1 = torch.mean(torch.sum(-new_target * log_probabilities, dim=-1)) # manual
+            loss2 = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam) # torch
+            loss = loss1 
         else:
             # compute output
             output = model(input)
             loss = criterion(output, target)
+    
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
